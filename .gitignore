@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+frontend/node_modules/
+frontend/dist/
+backend/target/
+backend/.mvn-cache/
+work/
+*.log
+
+backend/.m2/
