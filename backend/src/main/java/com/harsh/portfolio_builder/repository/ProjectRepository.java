@@ -6,4 +6,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface ProjectRepository extends JpaRepository<Project, Long> {
     List<Project> findAllByUserEmailIgnoreCaseOrderByDisplayOrderAscNameAsc(String email);
     Optional<Project> findByIdAndUserEmailIgnoreCase(Long id, String email);
+    Optional<Project> findByGithubUrlAndUserEmailIgnoreCase(String githubUrl, String email);
 }

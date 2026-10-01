@@ -44,10 +44,13 @@ public class GithubService {
             JsonNode repo=client.get().uri("/repos/{owner}/{repo}",request.username(),request.repository())
                     .headers(h->{if(!token.isBlank())h.setBearerAuth(token);}).retrieve().body(JsonNode.class);
             if(repo==null) throw new ApiException(HttpStatus.NOT_FOUND,"REPOSITORY_NOT_FOUND","Repository not found");
+            String repositoryUrl=text(repo,"html_url");
+            var existing=projects.findByGithubUrlAndUserEmailIgnoreCase(repositoryUrl,email);
+            if(existing.isPresent()) return ProjectResponse.from(existing.get());
             Project p=new Project(users.findByEmailIgnoreCase(email).orElseThrow(),repo.path("name").asText());
             String description=text(repo,"description");
             p.setShortDescription(description!=null&&description.length()>300?description.substring(0,297)+"...":description);
-            p.setGithubUrl(text(repo,"html_url")); p.setLiveUrl(text(repo,"homepage"));
+            p.setGithubUrl(repositoryUrl); p.setLiveUrl(text(repo,"homepage"));
             List<String> technologies=new ArrayList<>(); String language=text(repo,"language"); if(language!=null)technologies.add(language);
             repo.path("topics").forEach(t->technologies.add(t.asText())); p.setTechnologies(technologies);
             p.setDisplayOrder(projects.findAllByUserEmailIgnoreCaseOrderByDisplayOrderAscNameAsc(email).size());

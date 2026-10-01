@@ -1653,6 +1653,7 @@ function ResumeEditor({
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   function previewDraft(form: HTMLFormElement) {
     const fd = new FormData(form);
     let draft: ResumeItem;
@@ -1732,6 +1733,26 @@ function ResumeEditor({
     if (!confirm("Remove this item?")) return;
     await api(`${path}/${id}`, { method: "DELETE" });
     await refresh();
+  }
+  async function suggestExperienceDescription(form: HTMLFormElement) {
+    const company = form.elements.namedItem("company");
+    const role = form.elements.namedItem("position");
+    const description = form.elements.namedItem("description");
+    if (!(company instanceof HTMLInputElement) || !(role instanceof HTMLInputElement) || !(description instanceof HTMLTextAreaElement)) return;
+    setAiBusy(true);
+    setError("");
+    try {
+      const result = await api<{ suggestion: string }>("/api/ai/experience-description", {
+        method: "POST",
+        body: JSON.stringify({ company: company.value, role: role.value, text: description.value }),
+      });
+      description.value = result.suggestion;
+      description.dispatchEvent(new Event("input", { bubbles: true }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create a suggestion");
+    } finally {
+      setAiBusy(false);
+    }
   }
   const v = (key: keyof ResumeItem) => editing?.[key] || "";
   return (
@@ -1873,6 +1894,10 @@ function ResumeEditor({
                   defaultValue={String(v("description"))}
                 />
               </label>
+              <button type="button" className="button button-outline" disabled={aiBusy} onClick={(e) => suggestExperienceDescription(e.currentTarget.form!)}>
+                {aiBusy ? <LoaderCircle className="spin" size={15} /> : <WandSparkles size={15} />}
+                {aiBusy ? "Thinking…" : "Suggest with AI"}
+              </button>
             </>
           ) : (
             <div className="form-two">
@@ -1998,6 +2023,8 @@ type GithubRepo = {
   forks: number;
 };
 function GithubEditor({ refresh }: { refresh: () => void }) {
+  const { data: projects = [] } = useData<Project[]>("projects", "/api/projects");
+  const importedUrls = new Set(projects.map((project) => project.githubUrl?.replace(/\/$/, "").toLowerCase()).filter(Boolean));
   const [username, setUsername] = useState("");
   const [repos, setRepos] = useState<GithubRepo[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -2008,8 +2035,9 @@ function GithubEditor({ refresh }: { refresh: () => void }) {
     setBusy(true);
     setMessage("");
     try {
+      const normalizedUsername = username.trim();
       const list = await api<GithubRepo[]>(
-        `/api/github/repos/${encodeURIComponent(username.trim())}`,
+        `/api/github/repos/${encodeURIComponent(normalizedUsername)}`,
       );
       setRepos(list);
       setSelected([]);
@@ -2024,19 +2052,22 @@ function GithubEditor({ refresh }: { refresh: () => void }) {
     setBusy(true);
     setMessage("");
     let count = 0;
+    const failures: string[] = [];
     try {
       for (const repository of selected) {
-        await api("/api/github/import", {
-          method: "POST",
-          body: JSON.stringify({ username, repository }),
-        });
-        count++;
+        try {
+          await api("/api/github/import", {
+            method: "POST",
+            body: JSON.stringify({ username: username.trim(), repository }),
+          });
+          count++;
+        } catch {
+          failures.push(repository);
+        }
       }
-      refresh();
+      if (count) await refresh();
       setSelected([]);
-      setMessage(
-        `${count} ${count === 1 ? "project" : "projects"} added to your portfolio.`,
-      );
+      setMessage([count ? `${count} ${count === 1 ? "project" : "projects"} added to your portfolio.` : "No repositories were imported.", failures.length ? `Could not import: ${failures.join(", ")}.` : ""].filter(Boolean).join(" "));
     } catch (e) {
       setMessage(
         e instanceof Error ? e.message : "Could not import repository",
@@ -2100,18 +2131,21 @@ function GithubEditor({ refresh }: { refresh: () => void }) {
             </button>
           </div>
           <div className="github-repo-list">
-            {repos.map((repo) => (
+            {repos.map((repo) => {
+              const alreadyImported = importedUrls.has(repo.htmlUrl.replace(/\/$/, "").toLowerCase());
+              return (
               <label
-                className={`github-repo ${selected.includes(repo.name) ? "chosen" : ""}`}
+                className={`github-repo ${selected.includes(repo.name) ? "chosen" : ""} ${alreadyImported ? "imported" : ""}`}
                 key={repo.name}
               >
                 <input
                   type="checkbox"
                   checked={selected.includes(repo.name)}
                   onChange={() => toggle(repo.name)}
+                  disabled={alreadyImported || busy}
                 />
                 <div className="repo-main">
-                  <b>{repo.name}</b>
+                  <b>{repo.name} {alreadyImported && <span className="repo-imported-label">Already in portfolio</span>}</b>
                   <p>
                     {repo.description || "No repository description provided."}
                   </p>
@@ -2131,7 +2165,8 @@ function GithubEditor({ refresh }: { refresh: () => void }) {
                   <ExternalLink size={14} />
                 </a>
               </label>
-            ))}
+              );
+            })}
           </div>
         </>
       )}
@@ -2147,6 +2182,10 @@ function AiEditor({
   refresh: () => void;
   notify: (s: string) => void;
 }) {
+  const { data: skills = [] } = useData<Skill[]>("skills", "/api/skills");
+  const { data: experience = [] } = useData<ResumeItem[]>("resume-experience", "/api/experience");
+  const { data: education = [] } = useData<ResumeItem[]>("resume-education", "/api/education");
+  const { data: projects = [] } = useData<Project[]>("projects", "/api/projects");
   const [mode, setMode] = useState<"about" | "improve">("about");
   const [text, setText] = useState(profile?.bio || "");
   const [suggestion, setSuggestion] = useState("");
@@ -2168,10 +2207,10 @@ function AiEditor({
             name: profile?.fullName,
             headline: profile?.headline,
             bio: profile?.bio,
-            skills: [],
-            experience: [],
-            education: [],
-            projects: [],
+            skills: skills.map((skill) => skill.name),
+            experience: experience.map((item) => [item.position, item.company, item.description].filter(Boolean).join(" at ").slice(0, 100)),
+            education: education.map((item) => [item.degree, item.fieldOfStudy, item.institution].filter(Boolean).join(" — ").slice(0, 100)),
+            projects: projects.map((item) => [item.name, item.shortDescription, item.technologies?.join(", ")].filter(Boolean).join(": ").slice(0, 200)),
             text,
             tone: "warm and professional",
             length: "short",
